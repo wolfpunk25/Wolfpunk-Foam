@@ -5,6 +5,16 @@
 # This is the simplified stand-in for the Liquid Foam's VCO + wave mixer +
 # LPF + envelope generator + drive stage, collapsed onto knobs the encoder
 # pages can reach. See docs/liquid-foam-manual-notes.md for the mapping.
+#
+# IMPORTANT: a synthio.Note is built fresh on every trigger() rather than
+# mutated and re-pressed. On this board's CircuitPython 10.2.1,
+# Synthesizer.release_then_press() (and a manual release()+press() pair) on
+# the *same* Note object plays once and then goes silent on every
+# subsequent retrigger - confirmed on real hardware over serial REPL.
+# Building a new Note each time and calling press() on it works reliably.
+# Mutating an already-pressed note's own attributes (waveform/filter) while
+# it keeps sounding is fine; it's specifically re-pressing the same object
+# that's broken.
 
 import time
 import board
@@ -19,6 +29,9 @@ VOL = 28000
 FILTER_MIN_HZ = 60
 FILTER_MAX_HZ = 9000
 ENV_FILTER_RANGE_HZ = 6000  # how far the envelope can swing the cutoff
+
+ATTACK_TIME = 0.004
+RELEASE_TIME = 0.03
 
 WAVE_REGEN_THROTTLE = 0.03  # seconds; avoid rebuilding the table every tick
 
@@ -64,18 +77,7 @@ class Voice:
         self._pulse = _pulse(self._pulse_width)
         self._blend = 0.35
         self._last_wave_regen = 0.0
-
-        self.note = synthio.Note(
-            frequency=110,
-            waveform=np.array(self._crossfaded(), dtype=np.int16),
-            amplitude=0.6,
-            envelope=synthio.Envelope(
-                attack_time=0.004,
-                decay_time=0.3,
-                sustain_level=0.0,
-                release_time=0.03,
-            ),
-        )
+        self._waveform = np.array(self._crossfaded(), dtype=np.int16)
 
         self.cutoff_base = 2000
         self.resonance = 1.2
@@ -84,6 +86,7 @@ class Voice:
         self.drive = 0.15
         self.level = 0.7
 
+        self.note = None
         self._note_on_time = None
         self._playing = False
         self._extra_filter_hz = 0.0
@@ -102,7 +105,7 @@ class Voice:
             return
         self._last_wave_regen = now
         self._pulse = _pulse(self._pulse_width)
-        self.note.waveform = np.array(self._crossfaded(), dtype=np.int16)
+        self._waveform = np.array(self._crossfaded(), dtype=np.int16)
 
     def set_filter(self, cutoff_hz, resonance):
         self.cutoff_base = _clamp(cutoff_hz, FILTER_MIN_HZ, FILTER_MAX_HZ)
@@ -111,45 +114,50 @@ class Voice:
     def set_envelope(self, decay_time, depth):
         self.decay_time = _clamp(decay_time, 0.005, 2.0)
         self.env_depth = _clamp(depth, -1.0, 1.0)
-        self.note.envelope = synthio.Envelope(
-            attack_time=0.004,
-            decay_time=self.decay_time,
-            sustain_level=0.0,
-            release_time=0.03,
-        )
 
     def set_drive(self, drive, level):
         self.drive = _clamp(drive, 0.0, 1.0)
         self.level = _clamp(level, 0.15, 1.0)
 
-    def trigger(self, midi_note, extra_filter_hz=0.0):
-        self.note.frequency = synthio.midi_to_hz(midi_note)
-        amp = self.level * (1.0 + self.drive * 2.5)
-        self.note.amplitude = min(amp, 3.0)
-        self._note_on_time = time.monotonic()
-        self._playing = True
-        self._extra_filter_hz = extra_filter_hz
-        self._update_filter(0.0)
-        # retriggers the envelope even if the note was already sounding
-        # (legato steps in the pattern), and is safe even if it wasn't
-        self.synth.release_then_press(self.note)
-
-    def silence(self):
-        self.synth.release(self.note)
-        self._playing = False
-
-    def _update_filter(self, elapsed):
+    def _filter_for(self, elapsed):
         decay_frac = 2 ** (-elapsed / max(self.decay_time, 0.005))
         depth_hz = self.env_depth * ENV_FILTER_RANGE_HZ * decay_frac
         cutoff = self.cutoff_base + depth_hz + self._extra_filter_hz
         cutoff = _clamp(cutoff, FILTER_MIN_HZ, FILTER_MAX_HZ)
         # CircuitPython 10.2.1's synthio has no Synthesizer.low_pass_filter()
         # helper - build the Biquad directly instead.
-        self.note.filter = synthio.Biquad(synthio.FilterMode.LOW_PASS, frequency=cutoff, Q=self.resonance)
+        return synthio.Biquad(synthio.FilterMode.LOW_PASS, frequency=cutoff, Q=self.resonance)
+
+    def trigger(self, midi_note, extra_filter_hz=0.0):
+        self._note_on_time = time.monotonic()
+        self._playing = True
+        self._extra_filter_hz = extra_filter_hz
+
+        amp = min(self.level * (1.0 + self.drive * 2.5), 3.0)
+        envelope = synthio.Envelope(
+            attack_time=ATTACK_TIME,
+            decay_time=self.decay_time,
+            sustain_level=0.0,
+            release_time=RELEASE_TIME,
+        )
+        note = synthio.Note(
+            frequency=synthio.midi_to_hz(midi_note),
+            waveform=self._waveform,
+            amplitude=amp,
+            envelope=envelope,
+            filter=self._filter_for(0.0),
+        )
+        self.synth.release_all()
+        self.synth.press(note)
+        self.note = note
+
+    def silence(self):
+        self.synth.release_all()
+        self._playing = False
 
     def tick(self):
         """Call every main-loop iteration to sweep the filter envelope."""
-        if not self._playing or self._note_on_time is None:
+        if not self._playing or self.note is None or self._note_on_time is None:
             return
         if abs(self.env_depth) < 0.01:
             return  # flat cutoff, nothing to sweep
@@ -157,4 +165,4 @@ class Voice:
         if elapsed > self.decay_time * 6:
             self._playing = False  # envelope has settled; stop polling
             return
-        self._update_filter(elapsed)
+        self.note.filter = self._filter_for(elapsed)
