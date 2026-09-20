@@ -130,10 +130,9 @@ class Voice:
         self._playing = True
         self._extra_filter_hz = extra_filter_hz
         self._update_filter(0.0)
-        # release-then-press retriggers the envelope even if the note was
-        # already sounding (legato steps in the pattern)
-        self.synth.release(self.note)
-        self.synth.press(self.note)
+        # retriggers the envelope even if the note was already sounding
+        # (legato steps in the pattern), and is safe even if it wasn't
+        self.synth.release_then_press(self.note)
 
     def silence(self):
         self.synth.release(self.note)
@@ -144,7 +143,9 @@ class Voice:
         depth_hz = self.env_depth * ENV_FILTER_RANGE_HZ * decay_frac
         cutoff = self.cutoff_base + depth_hz + self._extra_filter_hz
         cutoff = _clamp(cutoff, FILTER_MIN_HZ, FILTER_MAX_HZ)
-        self.note.filter = self.synth.low_pass_filter(cutoff, self.resonance)
+        # CircuitPython 10.2.1's synthio has no Synthesizer.low_pass_filter()
+        # helper - build the Biquad directly instead.
+        self.note.filter = synthio.Biquad(synthio.FilterMode.LOW_PASS, frequency=cutoff, Q=self.resonance)
 
     def tick(self):
         """Call every main-loop iteration to sweep the filter envelope."""
