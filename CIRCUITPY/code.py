@@ -30,7 +30,7 @@ def clamp(v, lo, hi):
 class App:
     def __init__(self):
         self.macropad = MacroPad(midi_out_channel=MIDI_CHANNEL + 1)
-        self.voice = Voice()
+        self.voice = Voice(self.macropad)
         self.pattern = Pattern()
         self.vary = Vary()
         self.clock = Clock(bpm=110)

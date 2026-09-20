@@ -8,7 +8,6 @@
 
 import time
 import board
-import digitalio
 import audiopwmio
 import synthio
 import ulab.numpy as np
@@ -49,10 +48,11 @@ def _clamp(v, lo, hi):
 
 
 class Voice:
-    def __init__(self):
-        enable = digitalio.DigitalInOut(board.SPEAKER_ENABLE)
-        enable.switch_to_output(value=True)
-        self._enable = enable
+    def __init__(self, macropad):
+        # adafruit_macropad.MacroPad already claims SPEAKER_ENABLE in its own
+        # constructor and never exposes it publicly, so reuse the pin it's
+        # holding rather than fight it for ownership (raises "in use").
+        macropad._speaker_enable.value = True
 
         self.audio = audiopwmio.PWMAudioOut(board.SPEAKER)
         self.synth = synthio.Synthesizer(sample_rate=SAMPLE_RATE)
