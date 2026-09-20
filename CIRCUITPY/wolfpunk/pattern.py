@@ -54,14 +54,21 @@ class Vary:
         self.resonance = 0.0
         self.drive = 0.0
 
+    def _signed(self, magnitude_min, magnitude_max):
+        # uniform(-max, max) can land near zero and feel like nothing
+        # happened; pick a magnitude that's always at least noticeable,
+        # then randomize its sign.
+        magnitude = self._rng.uniform(magnitude_min, magnitude_max)
+        return magnitude if self._rng.random() < 0.5 else -magnitude
+
     def reroll(self):
-        self.filter_hz = self._rng.uniform(-1500, 1500)
-        self.resonance = self._rng.uniform(-1.5, 1.5)
-        self.drive = self._rng.uniform(-0.2, 0.2)
+        self.filter_hz = self._signed(800, 2600)
+        self.resonance = self._signed(0.8, 2.5)
+        self.drive = self._signed(0.08, 0.3)
 
     def step(self):
         if not self.enabled:
             return
-        self.filter_hz = _clamp(self.filter_hz + self._rng.uniform(-400, 400), -1800, 1800)
-        self.resonance = _clamp(self.resonance + self._rng.uniform(-0.4, 0.4), -2.0, 2.0)
-        self.drive = _clamp(self.drive + self._rng.uniform(-0.06, 0.06), -0.25, 0.25)
+        self.filter_hz = _clamp(self.filter_hz + self._signed(150, 500), -2600, 2600)
+        self.resonance = _clamp(self.resonance + self._signed(0.15, 0.5), -2.5, 2.5)
+        self.drive = _clamp(self.drive + self._signed(0.03, 0.08), -0.3, 0.3)

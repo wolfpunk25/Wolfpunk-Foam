@@ -193,6 +193,7 @@ class App:
             self.vary.enabled = not self.vary.enabled
             if self.vary.enabled:
                 self.vary.reroll()
+                self._preview_vary()
         elif key_number == ui_mod.KEY_PAGE:
             self.shift_held = pressed
             if pressed:
@@ -211,8 +212,14 @@ class App:
     def handle_encoder_switch(self, held_ms):
         if held_ms > 600:
             self.vary.reroll()
+            self._preview_vary()
         else:
             self.lfo_dest_pitch = not self.lfo_dest_pitch
+
+    def _preview_vary(self):
+        # give instant feedback on the new vary values rather than making
+        # the player wait for the next natural step
+        self._play_step(self.pattern.position, live=True)
 
     # -- display ----------------------------------------------------
     def _render(self):
